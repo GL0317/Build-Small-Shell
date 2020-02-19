@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <assert.h>
 #include <string.h>
+#include <unistd.h>
 
 const int LINE = 2048;
 const int ARG_LIMIT = 512;
@@ -24,17 +25,19 @@ struct commandLine {
     bool isBackground;
     char *inputFile;
     char *outputFile;
+    int status;
 };
 
 
 int verifyInput(char *userInput);
 void bashManager();
-void builtInManager();
+int builtInManager(struct commandLine *cmd);
 void parser(struct commandLine *cmd, char *user);
 char *getString(char *data);
 void destroy(struct commandLine *cmd);
 struct commandLine * create();
-void prompt(struct commandLine *cmd);
+void prompt(struct commandLine *cmd, int *exitValue);
+void directoryCmd(struct commandLine *cmd);
 
 /*** unit tests ***/
 void print(struct commandLine *cmd) {
@@ -56,11 +59,14 @@ void print(struct commandLine *cmd) {
 
 int main() {
     struct commandLine *line;
+    int exitValue = 1;
 
-    line = create();
-    prompt(line);
- /**   print(line);  **/
-    destroy(line);
+    do {
+        line = create();
+        prompt(line, &exitValue);
+     /**   print(line);  **/
+        destroy(line);
+    } while (exitValue != 0);
     return 0;
 }
 
@@ -101,11 +107,51 @@ void bashManager() {
 }
 
 
-/*
- *
+/* Changes from current directory to a specified directory
+ * @precondition: To execute command, cmd->cmdLine[0] should me "cd" and 
+ *                argument count cannot be greater than 1
+ * @postcondition: The current directory should not be the same location as this program, 
+ *                 unless the user enters "cd ."
  */
-void builtInManager() {
-    printf("Hi I'm Built-In Manager\n");
+void directoryCmd(struct commandLine *cmd) {
+    char path[200];
+
+    memset(path, '\0', 200);
+    // verify argument count is not greater than 1
+    if (cmd->argCount > 1) { return; }
+    // change directory to HOME - 0 arguments
+    if (cmd->argCount == 0) {
+        strcpy(path, getenv("HOME"));
+    } else {
+        strcpy(path, cmd->cmdLine[1]);
+    }
+    // relative and absolute directory change
+    if(chdir(path) == -1) {
+        fprintf(stderr, "Error: cd: No such file or directory\n");
+    }
+}
+
+
+/* Determines which built-in commands to execute according to the value of
+ * cmd->cmdLine[0]
+ * @precondtion: cmd->cmdLine[0] must be "cd", "status", or "exit"
+ * @postcondition: Function executes any options defined in this precondition
+ * @return: 0 - signals the program to exist smallSh
+ *          1 - signals the program to continue running smallsh
+ */
+int builtInManager(struct commandLine *cmd) {
+    int flag = 1;
+    if (!strcmp(cmd->cmdLine[0], "cd")) {
+        directoryCmd(cmd);
+    } else if (!strcmp(cmd->cmdLine[0], "status")) {
+        printf("exit value %d\n", cmd->status);
+        fflush(stdout);
+    } else {
+        // use exit command
+        //  Kill all processes and jobs before exiting
+        flag = 0;
+    }
+    return flag;
 }
 
 
@@ -202,7 +248,7 @@ void parser(struct commandLine *cmd, char *user) {
                   user input cannot exceed 512 arguments( input redirection are not counted as arguments)
  * @postcondion:  The user command line is parsed and broken down into tokens, and it is process by other methods for shell execution
  */
-void prompt(struct commandLine *cmd) {
+void prompt(struct commandLine *cmd, int *exitValue) {
     bool  isBuiltIn = false;
     char user[LINE];
     int count = 0, flag = 0;
@@ -229,7 +275,6 @@ void prompt(struct commandLine *cmd) {
         ++count;
         ++index;
     }
-    printf("This is count = %d\n", count);
     cmd->argCount = count;
     if (count == ARG_LIMIT) {
         fprintf(stderr, "argument count is greater than 512 argument limit\n");
@@ -239,7 +284,7 @@ void prompt(struct commandLine *cmd) {
     // if it's built-in, send to built-in manager
     while ( index < 3 && !isBuiltIn) {
         if (!strcmp(cmd->cmdLine[0], builtInCmd[index])) {
-            builtInManager();
+            *exitValue = builtInManager(cmd);
             isBuiltIn = true;
         }
         ++index;
@@ -259,6 +304,7 @@ struct commandLine * create() {
     cmd->inputFile = NULL;
     cmd->outputFile = NULL;
     cmd->argCount = -5;
+    cmd->status = -1;
     return cmd;
 }
 
