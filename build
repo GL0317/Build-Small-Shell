@@ -1,0 +1,3 @@
+#!/bin/bash
+
+gcc -g -Wall -std=c99 smallsh.c -o prog
