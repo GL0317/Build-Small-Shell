@@ -14,6 +14,9 @@
 #include <assert.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 
 const int LINE = 2048;
 const int ARG_LIMIT = 512;
@@ -30,7 +33,7 @@ struct commandLine {
 
 
 int verifyInput(char *userInput);
-void bashManager();
+void bashManager(struct commandLine *cmd);
 int builtInManager(struct commandLine *cmd);
 void parser(struct commandLine *cmd, char *user);
 char *getString(char *data);
@@ -38,6 +41,8 @@ void destroy(struct commandLine *cmd);
 struct commandLine * create();
 void prompt(struct commandLine *cmd, int *exitValue);
 void directoryCmd(struct commandLine *cmd);
+void handleRedirect (struct commandLine *cmd);
+void getExitStatus(int childProcess, struct commandLine *cmd);
 
 /*** unit tests ***/
 void print(struct commandLine *cmd) {
@@ -59,14 +64,17 @@ void print(struct commandLine *cmd) {
 
 int main() {
     struct commandLine *line;
-    int exitValue = 1;
+    int quitShell = 1;
+    int previousExitStatus = 0;
 
     do {
         line = create();
-        prompt(line, &exitValue);
+        line->status = previousExitStatus;
+        prompt(line, &quitShell);
      /**   print(line);  **/
+        previousExitStatus = line->status;
         destroy(line);
-    } while (exitValue != 0);
+    } while (quitShell != 0);
     return 0;
 }
 
@@ -102,8 +110,66 @@ void destroy(struct commandLine *cmd) {
 /*
  *
  */
-void bashManager() {
-    printf("Hi I'm Bash Manager\n");
+void handleRedirect (struct commandLine *cmd) {
+    int targetFDOut, targetFDIn;
+    if (cmd->inputFile) {
+        // do something
+        targetFDIn = open(cmd->inputFile, O_RDONLY);
+    }
+    if (cmd->outputFile) {
+        // do something
+        targetFDOut = open(cmd->outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    }
+}
+
+
+/*
+ *
+ */
+void getExitStatus(int childProcess, struct commandLine *cmd) {
+    int signal;
+    // determine if child terminated normally
+    if (WIFEXITED(childProcess)) {
+        cmd->status = WEXITSTATUS(childProcess);
+    } else if (WIFSIGNALED(childProcess)) {
+        signal = WTERMSIG(childProcess);
+        printf("Terminated by signal %d\n", signal);
+        fflush(stdout);
+   }
+}
+
+
+/*
+ *
+ */
+void bashManager(struct commandLine *cmd) {
+    pid_t spawnpid = -5;
+    int exitChildMethod = -5;
+
+    // call another process to handle non-built in commands
+    spawnpid = fork();
+    switch (spawnpid) {
+        case -1:
+            fprintf(stderr, "Hull Breached!");
+            exit(1);
+            break;
+        case 0:
+            // handle redirect
+            handleRedirect(cmd);
+            // handle foreground
+            if (execvp(cmd->cmdLine[0], cmd->cmdLine) < 0) {
+                fprintf(stderr, "Hull Breached!");
+                //exit(1);
+            }
+            exit(0);
+            break;
+        default:
+            // wait for foreground commands to complete in child process
+            waitpid(spawnpid, &exitChildMethod, 0); 
+            getExitStatus(exitChildMethod, cmd);
+            // handle background commands
+            break;
+    }
 }
 
 
@@ -291,7 +357,7 @@ void prompt(struct commandLine *cmd, int *exitValue) {
     }
     if (!isBuiltIn) {
         // send to bash manager
-       bashManager();
+       bashManager(cmd);
     }
 }
 
@@ -304,7 +370,7 @@ struct commandLine * create() {
     cmd->inputFile = NULL;
     cmd->outputFile = NULL;
     cmd->argCount = -5;
-    cmd->status = -1;
+    //cmd->status = 0;
     return cmd;
 }
 
