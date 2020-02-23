@@ -41,7 +41,7 @@ void destroy(struct commandLine *cmd);
 struct commandLine * create();
 void prompt(struct commandLine *cmd, int *exitValue);
 void directoryCmd(struct commandLine *cmd);
-void handleRedirect (struct commandLine *cmd);
+int handleRedirect (struct commandLine *cmd);
 void getExitStatus(int childProcess, struct commandLine *cmd);
 
 /*** unit tests ***/
@@ -110,16 +110,35 @@ void destroy(struct commandLine *cmd) {
 /*
  *
  */
-void handleRedirect (struct commandLine *cmd) {
-    int targetFDOut, targetFDIn;
+int handleRedirect (struct commandLine *cmd) {
+    int fDOut, fDIn, result, flag = 0;
     if (cmd->inputFile) {
         // do something
-        targetFDIn = open(cmd->inputFile, O_RDONLY);
+        fDIn = open(cmd->inputFile, O_RDONLY);
+        if (fDIn == -1) { fprintf(stderr, "cannot open %s for input\n", cmd->inputFile); exit(1);}
+        result = dup2(fDIn, 0);
+        if (result == -1) { fprintf(stderr, "source dup2() on fDIn\n"); exit(1);}
+        fcntl(fDIn, F_SETFD, FD_CLOEXEC);
+        flag = 1;
+
     }
     if (cmd->outputFile) {
         // do something
-        targetFDOut = open(cmd->outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        fDOut = open(cmd->outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fDOut == -1) { fprintf(stderr, "cannot open %s for output\n", cmd->outputFile); exit(1);}
+        result = dup2(fDOut, 1);
+        if (result == -1) { fprintf(stderr, "source dup2() on fDOut\n"); exit(1);}
+        fcntl(fDOut, F_SETFD, FD_CLOEXEC);
+        flag = 1;
     }
+    // call exec and catch exit value
+    if (flag) {
+        if (execlp(cmd->cmdLine[0], cmd->cmdLine[0], NULL) == -1) {
+            fprintf(stderr, "No such file or directory");
+            exit(1);
+        }
+    }
+    return flag;
 }
 
 
@@ -155,11 +174,12 @@ void bashManager(struct commandLine *cmd) {
             break;
         case 0:
             // handle redirect
-            handleRedirect(cmd);
-            // handle foreground
-            if (execvp(cmd->cmdLine[0], cmd->cmdLine) < 0) {
-                fprintf(stderr, "Hull Breached!");
-                //exit(1);
+            if (!handleRedirect(cmd)) {
+                // handle foreground
+                if (execvp(cmd->cmdLine[0], cmd->cmdLine) < 0) {
+                    fprintf(stderr, "Hull Breached!");
+                    exit(1);
+                }
             }
             exit(0);
             break;
