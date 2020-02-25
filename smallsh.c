@@ -32,17 +32,24 @@ struct commandLine {
 };
 
 
+struct backgroundPID {
+    int bgPid[200];
+    int count;
+};
+
+
+
 int verifyInput(char *userInput);
-void bashManager(struct commandLine *cmd);
+void bashManager(struct commandLine *cmd, struct backgroundPID *bgPD);
 int builtInManager(struct commandLine *cmd);
 void parser(struct commandLine *cmd, char *user);
 char *getString(char *data);
 void destroy(struct commandLine *cmd);
 struct commandLine * create();
-void prompt(struct commandLine *cmd, int *exitValue);
+void prompt(struct commandLine *cmd, int *exitValue, struct backgroundPID *bgPD);
 void directoryCmd(struct commandLine *cmd);
 int handleRedirect (struct commandLine *cmd);
-void getExitStatus(int childProcess, struct commandLine *cmd);
+int getExitStatus(int childProcess, struct commandLine *cmd);
 
 /*** unit tests ***/
 void print(struct commandLine *cmd) {
@@ -64,14 +71,34 @@ void print(struct commandLine *cmd) {
 
 int main() {
     struct commandLine *line;
+    struct backgroundPID bgProcess;
     int quitShell = 1;
     int previousExitStatus = 0;
+    int exitMethod;
 
+    bgProcess.count = 0;
+    // initialize all background pid to -1
+    for (int i = 0; i < 200; ++i) {
+        bgProcess.bgPid[i] = -1;
+    }
     do {
         line = create();
         line->status = previousExitStatus;
-        prompt(line, &quitShell);
-     /**   print(line);  **/
+        prompt(line, &quitShell, &bgProcess);
+       // search and find status of background processes 
+       for (int i = 0; i < bgProcess.count; ++i) {
+           if (bgProcess.bgPid[i] != -1) {
+               // check the status of each process in the array
+               if (waitpid(bgProcess.bgPid[i], &exitMethod, WNOHANG) != 0) {
+                   printf("background pid %d is done: ", bgProcess.bgPid[i]);
+                   //get the exit status
+                   if(getExitStatus(exitMethod, line)) {
+                        printf("Exit value %d\n", line->status);
+                   }
+                   bgProcess.bgPid[i] = -1;
+                }
+           }
+       }
         previousExitStatus = line->status;
         destroy(line);
     } while (quitShell != 0);
@@ -107,13 +134,17 @@ void destroy(struct commandLine *cmd) {
 }
 
 
-/*
- *
+/* Redirects stdout and stdin when command line has ">", "<", or a background
+ * command with no arguments.
+ * @precondition: cmd->outFile or cmd->inFile must contain a file name, or cmd->isBackground
+ *               is true
+ * @postcondition: stdout or stdin is redirected to a file or to /dev/null 
+ * @return: 0 - redirection failed
+ *          1 - standard I/O redirection is successful
  */
 int handleRedirect (struct commandLine *cmd) {
-    int fDOut, fDIn, result, flag = 0;
+    int fDOut, fDIn, fDNull,result, flag = 0;
     if (cmd->inputFile) {
-        // do something
         fDIn = open(cmd->inputFile, O_RDONLY);
         if (fDIn == -1) { fprintf(stderr, "cannot open %s for input\n", cmd->inputFile); exit(1);}
         result = dup2(fDIn, 0);
@@ -123,13 +154,21 @@ int handleRedirect (struct commandLine *cmd) {
 
     }
     if (cmd->outputFile) {
-        // do something
         fDOut = open(cmd->outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fDOut == -1) { fprintf(stderr, "cannot open %s for output\n", cmd->outputFile); exit(1);}
         result = dup2(fDOut, 1);
         if (result == -1) { fprintf(stderr, "source dup2() on fDOut\n"); exit(1);}
         fcntl(fDOut, F_SETFD, FD_CLOEXEC);
         flag = 1;
+    }
+    // Background commands with no arguments redirects stdout and stdin to /dev/null
+    if (cmd->isBackground && cmd->argCount == 0) {
+        fDNull = open("/dev/null", O_RDWR);
+        result = dup2(fDNull, 0);
+        if (result == -1) { fprintf(stderr, "source dup2() on fDNull\n"); exit(1);}
+        result = dup2(fDNull, 1);
+        if (result == -1) { fprintf(stderr, "source dup2() on fDNull\n"); exit(1);}
+        fcntl(fDNull, F_SETFD, FD_CLOEXEC);
     }
     // call exec and catch exit value
     if (flag) {
@@ -142,28 +181,36 @@ int handleRedirect (struct commandLine *cmd) {
 }
 
 
-/*
- *
+/* Checks the exit status of a process
+ * @precondition: none
+ * @postcondition:  Exit status of process is assigned to cmd->status.   
+ *                  If process is terminated by a signal, the program notifies the user
+ * @return: 0 - the process did not terminate normally
+ *          1 - the process terminated normally
  */
-void getExitStatus(int childProcess, struct commandLine *cmd) {
-    int signal;
+int getExitStatus(int childProcess, struct commandLine *cmd) {
+    int signal, flag = 0;
     // determine if child terminated normally
     if (WIFEXITED(childProcess)) {
         cmd->status = WEXITSTATUS(childProcess);
+        flag = 1;
     } else if (WIFSIGNALED(childProcess)) {
         signal = WTERMSIG(childProcess);
         printf("Terminated by signal %d\n", signal);
         fflush(stdout);
    }
+   return flag;
 }
 
 
-/*
- *
+/* Manages non-built in commands of this shell. Manages foreground and background commands, and
+ * standard I/O redirection.  The non-built in commands are bash shell commands.
+ * @precondition: There exist an array that holds the process id of background process.
+ * @postcondition: A new process is created and executed for a non-built in command
  */
-void bashManager(struct commandLine *cmd) {
+void bashManager(struct commandLine *cmd, struct backgroundPID *bgPD) {
     pid_t spawnpid = -5;
-    int exitChildMethod = -5;
+    int exitChildMethod = -5, flag;
 
     // call another process to handle non-built in commands
     spawnpid = fork();
@@ -185,9 +232,16 @@ void bashManager(struct commandLine *cmd) {
             break;
         default:
             // wait for foreground commands to complete in child process
-            waitpid(spawnpid, &exitChildMethod, 0); 
-            getExitStatus(exitChildMethod, cmd);
-            // handle background commands
+           if (!cmd->isBackground) {
+                waitpid(spawnpid, &exitChildMethod, 0); 
+                flag = getExitStatus(exitChildMethod, cmd);
+           } else {
+                // handle background commands
+                waitpid(spawnpid, &exitChildMethod, WNOHANG);
+                // keep track of process id in an array
+                bgPD->bgPid[bgPD->count] = spawnpid;
+                ++bgPD->count;
+            }
             break;
     }
 }
@@ -245,6 +299,7 @@ int builtInManager(struct commandLine *cmd) {
  *  function removes the new line character from a user input
  *  @return: 0 - the command line consist of "#" as first character or its only a newline character
  *           1 - the command line is not a new line or a comment
+ *           2 - the command is a background command because it consist of '&'
  */
 int verifyInput( char *userInput) {
     int flag = 1;
@@ -254,14 +309,19 @@ int verifyInput( char *userInput) {
 
     // remove the newline character at the end of user input string
     size = strlen(userInput);
+    //  verify that command line is not a new line or a comment #
+    if (userInput[0] == symbol || (size == 1 && userInput[0] == format)) {
+        return 0;;
+    }
     for (int i = size; i >= 0; --i) {
         if (userInput[i] == '\n') {
             userInput[i] = '\0';
         }
-    }
-    //  verify that command line is not a new line or a comment #
-    if (userInput[0] == symbol || (size == 1 && userInput[0] == format)) {
-        flag = 0;
+        if (userInput[i] == '&') {
+            userInput[i] = '\0';
+            flag = 2;
+            break;
+        }
     }
     return flag;
 }
@@ -272,12 +332,15 @@ int verifyInput( char *userInput) {
 */
 char *getString(char *data) {
     char *newStr = NULL;
-    int size = strlen(data) + 1;
+    int size;
 
-    if (size == 1) { return NULL; }
-    newStr = (char *)malloc(size * sizeof(char));
-    assert(newStr != 0);
-    strcpy(newStr, data);
+    if (data) {
+        size = strlen(data) + 1;
+        if (size == 1) { return NULL; }
+        newStr = (char *)malloc(size * sizeof(char));
+        assert(newStr != 0);
+        strcpy(newStr, data);
+    }
     return newStr;
 }
 
@@ -313,15 +376,13 @@ void parser(struct commandLine *cmd, char *user) {
         }
         cmd->cmdLine[index] = getString(temp);
         // find "<" symbol, then parse the filename and copy it
-        if (!strcmp(temp, "<")) {
-            setFile = 1;
-        }
-        if (!strcmp(temp, ">")) {
-            setFile = 2;
-        } 
-        if (!strcmp(temp, "&")) {
-           // find "&", change isBackground to true
-           cmd->isBackground = true;
+        if (temp) {
+            if (!strcmp(temp, "<")) {
+                setFile = 1;
+            }
+            if (!strcmp(temp, ">")) {
+                setFile = 2;
+            }
         }
         temp = strtok(NULL, " ");
         ++index;
@@ -334,7 +395,7 @@ void parser(struct commandLine *cmd, char *user) {
                   user input cannot exceed 512 arguments( input redirection are not counted as arguments)
  * @postcondion:  The user command line is parsed and broken down into tokens, and it is process by other methods for shell execution
  */
-void prompt(struct commandLine *cmd, int *exitValue) {
+void prompt(struct commandLine *cmd, int *exitValue, struct backgroundPID *bgPD) {
     bool  isBuiltIn = false;
     char user[LINE];
     int count = 0, flag = 0;
@@ -352,6 +413,9 @@ void prompt(struct commandLine *cmd, int *exitValue) {
         flag = verifyInput(user);
     } while (flag == 0);
     // parse the input
+    if (flag == 2) { // verifyInput signaled a background command exist
+        cmd->isBackground = true;
+    }
     parser(cmd, user);
     // verify argument count
     while (cmd->cmdLine[index] && index < CMD_TOKEN) {
@@ -377,7 +441,7 @@ void prompt(struct commandLine *cmd, int *exitValue) {
     }
     if (!isBuiltIn) {
         // send to bash manager
-       bashManager(cmd);
+       bashManager(cmd, bgPD);
     }
 }
 
