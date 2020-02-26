@@ -37,6 +37,8 @@ struct backgroundPID {
     int count;
 };
 
+int foregroundMode = 0;
+
 
 
 int verifyInput(char *userInput);
@@ -51,6 +53,8 @@ void directoryCmd(struct commandLine *cmd);
 int handleRedirect (struct commandLine *cmd);
 int getExitStatus(int childProcess, struct commandLine *cmd);
 void ignoreSignal(int signal);
+void foregroundModeSignal();
+void setFgMode();
 
 /*** unit tests ***/
 void print(struct commandLine *cmd) {
@@ -106,6 +110,38 @@ int main() {
     return 0;
 }
 
+
+/*
+ *
+ */
+void setFgMode() {
+    char *onMsg = "\nEntering foreground-only mode (& is now ignored)\n: ";
+    char *offMsg = "\nExiting foreground-only mode\n: ";
+
+    // 52 size
+    if (foregroundMode) {
+        foregroundMode = 0;  // turn of mode
+        write(STDOUT_FILENO, offMsg, 32);
+    } else {
+        foregroundMode = 1; // turn on mode
+        write(STDOUT_FILENO, onMsg, 52);
+    }
+}
+
+
+/*
+ *
+ */
+void foregroundModeSignal() {
+    struct sigaction SIGTSTP_action = {0};
+
+    // setup sigaction signal
+    SIGTSTP_action.sa_handler = setFgMode;
+    sigfillset(&SIGTSTP_action.sa_mask);
+    SIGTSTP_action.sa_flags = SA_RESTART;
+    // activate sigaction
+    sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+}
 
 /*
  *
@@ -230,6 +266,8 @@ void bashManager(struct commandLine *cmd, struct backgroundPID *bgPD) {
     // call another process to handle non-built in commands
     // Parent process ignores ^C
     ignoreSignal(SIGINT);
+    // catch CTRL-Z (SIGTSP signal)
+    foregroundModeSignal();
     spawnpid = fork();
     switch (spawnpid) {
         case -1:
@@ -237,6 +275,8 @@ void bashManager(struct commandLine *cmd, struct backgroundPID *bgPD) {
             exit(1);
             break;
         case 0:
+            // ignore CTRL-Z (SIGTSTP signal)
+            ignoreSignal(SIGTSTP);
             // handle redirect
             if (!handleRedirect(cmd)) {
                 // handle foreground
@@ -382,7 +422,6 @@ void parser(struct commandLine *cmd, char *user) {
     int pid;
     char pidStr[6];
     char pidName[200];
-    int saveIndex;  // saves indices with "$$"
     
     memset(pidName, '\0', 200);
     cmd->cmdLine = (char **)malloc(CMD_TOKEN * sizeof(char *));
@@ -457,7 +496,7 @@ void prompt(struct commandLine *cmd, int *exitValue, struct backgroundPID *bgPD)
         flag = verifyInput(user);
     } while (flag == 0);
     // parse the input
-    if (flag == 2) { // verifyInput signaled a background command exist
+    if (flag == 2 && foregroundMode == 0) { // verifyInput signaled a background command exist
         cmd->isBackground = true;
     }
     parser(cmd, user);
