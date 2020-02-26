@@ -295,6 +295,8 @@ void bashManager(struct commandLine *cmd, struct backgroundPID *bgPD) {
            } else {
                 // handle background commands
                 waitpid(spawnpid, &exitChildMethod, WNOHANG);
+                printf("background pid is %d\n", spawnpid);
+                fflush(stdout);
                 // keep track of process id in an array
                 bgPD->bgPid[bgPD->count] = spawnpid;
                 ++bgPD->count;
