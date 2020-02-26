@@ -41,7 +41,7 @@ struct backgroundPID {
 
 int verifyInput(char *userInput);
 void bashManager(struct commandLine *cmd, struct backgroundPID *bgPD);
-int builtInManager(struct commandLine *cmd);
+int builtInManager(struct commandLine *cmd, struct backgroundPID *bg);
 void parser(struct commandLine *cmd, char *user);
 char *getString(char *data);
 void destroy(struct commandLine *cmd);
@@ -50,6 +50,7 @@ void prompt(struct commandLine *cmd, int *exitValue, struct backgroundPID *bgPD)
 void directoryCmd(struct commandLine *cmd);
 int handleRedirect (struct commandLine *cmd);
 int getExitStatus(int childProcess, struct commandLine *cmd);
+void ignoreSignal(int signal);
 
 /*** unit tests ***/
 void print(struct commandLine *cmd) {
@@ -103,6 +104,20 @@ int main() {
         destroy(line);
     } while (quitShell != 0);
     return 0;
+}
+
+
+/*
+ *
+ *
+ */
+void ignoreSignal(int signal) {
+    struct sigaction ignore_action = {0};
+
+    // setup signal handling
+    ignore_action.sa_handler = SIG_IGN;
+    // activate sigaction for ignoring signals
+    sigaction(signal, &ignore_action, NULL);
 }
 
 
@@ -213,6 +228,8 @@ void bashManager(struct commandLine *cmd, struct backgroundPID *bgPD) {
     int exitChildMethod = -5, flag;
 
     // call another process to handle non-built in commands
+    // Parent process ignores ^C
+    ignoreSignal(SIGINT);
     spawnpid = fork();
     switch (spawnpid) {
         case -1:
@@ -224,7 +241,7 @@ void bashManager(struct commandLine *cmd, struct backgroundPID *bgPD) {
             if (!handleRedirect(cmd)) {
                 // handle foreground
                 if (execvp(cmd->cmdLine[0], cmd->cmdLine) < 0) {
-                    fprintf(stderr, "Hull Breached!");
+                    fprintf(stderr, "No such file or directory.\n");
                     exit(1);
                 }
             }
@@ -279,7 +296,7 @@ void directoryCmd(struct commandLine *cmd) {
  * @return: 0 - signals the program to exist smallSh
  *          1 - signals the program to continue running smallsh
  */
-int builtInManager(struct commandLine *cmd) {
+int builtInManager(struct commandLine *cmd, struct backgroundPID *bg) {
     int flag = 1;
     if (!strcmp(cmd->cmdLine[0], "cd")) {
         directoryCmd(cmd);
@@ -289,6 +306,11 @@ int builtInManager(struct commandLine *cmd) {
     } else {
         // use exit command
         //  Kill all processes and jobs before exiting
+        for (int i = 0; i < bg->count; ++i) {
+            if (bg->bgPid[i] != -1) {
+                kill(bg->bgPid[i], SIGKILL);
+            }
+        }
         flag = 0;
     }
     return flag;
@@ -353,9 +375,16 @@ char *getString(char *data) {
  */
 void parser(struct commandLine *cmd, char *user) {
     char *temp = NULL;
+    char *overwrite = NULL;
     int index = 0;
     int setFile = 0; // 0 - no files, 1 - input file, 2 - output file
+    int flag = 0;
+    int pid;
+    char pidStr[6];
+    char pidName[200];
+    int saveIndex;  // saves indices with "$$"
     
+    memset(pidName, '\0', 200);
     cmd->cmdLine = (char **)malloc(CMD_TOKEN * sizeof(char *));
     assert(cmd->cmdLine != 0);
     for (int i = 0; i < CMD_TOKEN; ++i) {
@@ -365,6 +394,8 @@ void parser(struct commandLine *cmd, char *user) {
     temp = strtok(user, " ");
     // parse arguments according to argument count
     do {
+        // search and replace $$ with shell process id
+        overwrite = strstr(temp, "$$");
         if (setFile == 1) {
             // find ">" symbol, then copy the input file
             cmd->inputFile = getString(temp);
@@ -374,8 +405,21 @@ void parser(struct commandLine *cmd, char *user) {
             cmd->outputFile = getString(temp);
             setFile = 0;
         }
-        cmd->cmdLine[index] = getString(temp);
-        // find "<" symbol, then parse the filename and copy it
+        if (overwrite) {
+            // copy the temp into pidName and save the index
+            strcpy(pidName, temp);
+            overwrite = strstr(pidName, "$$");
+            // get the shell process id and change it to a string
+            pid = getpid();
+            flag = snprintf(pidStr, 10, "%d", pid);
+            if (flag) {
+                strcpy(overwrite, pidStr);
+            } 
+            cmd->cmdLine[index] = getString(pidName);
+        } else {
+            cmd->cmdLine[index] = getString(temp);
+        }
+        // find "<" or ">" symbol, then parse the filename and copy it
         if (temp) {
             if (!strcmp(temp, "<")) {
                 setFile = 1;
@@ -434,7 +478,7 @@ void prompt(struct commandLine *cmd, int *exitValue, struct backgroundPID *bgPD)
     // if it's built-in, send to built-in manager
     while ( index < 3 && !isBuiltIn) {
         if (!strcmp(cmd->cmdLine[0], builtInCmd[index])) {
-            *exitValue = builtInManager(cmd);
+            *exitValue = builtInManager(cmd, bgPD);
             isBuiltIn = true;
         }
         ++index;
