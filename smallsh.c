@@ -1,11 +1,22 @@
 /* NAME: smallsh.c
  *
  * SYNOPSIS: 
+ *              After compiling the program (see README.txt), use the following syntax to
+ *              interact with the system:
+ *                  command [arg1 arg2 ...] [< input_file] [> output_file] [&]
  *
- * DESCRIPTION
- * AUTHOR: Gerson Lindor Jr.
+ * DESCRIPTION:
+ *              This program simulates a shell that is simular to Bash. The program contains 
+ *              three build in commands:
+ *                      cd - changes the directory, but returns to the directory that the shell is in
+ *                           when the shell exits
+ *                      status - reveals the exit status of the most recent foreground command
+ *                      exit - Ends the shell program, and kills all existing processes that the shell created
+ *              The program also implements bash commands by generating new processes via fork. The program has a
+ *              foreground mode feature that makes all commands foreground only.
+ * AUTHOR: Gerson Lindor Jr. (lindorg@oregonstate.edu)
  * DATE CREATED: February 16, 2020
- * DATE LAST MODIFIED:
+ * DATE LAST MODIFIED: February 26, 2020
  */
 
 #include <stdio.h>
@@ -111,8 +122,9 @@ int main() {
 }
 
 
-/*
- *
+/* Sets the global variable, foregroundMode, to 0 or 1, and
+ * notifies the user when the program is on or off of 
+ * foreground-only mode
  */
 void setFgMode() {
     char *onMsg = "\nEntering foreground-only mode (& is now ignored)\n: ";
@@ -129,9 +141,7 @@ void setFgMode() {
 }
 
 
-/*
- *
- */
+// Catches the Ctrl Z (SIGTSTP) signal and changes foreground mode settings
 void foregroundModeSignal() {
     struct sigaction SIGTSTP_action = {0};
 
@@ -143,10 +153,8 @@ void foregroundModeSignal() {
     sigaction(SIGTSTP, &SIGTSTP_action, NULL);
 }
 
-/*
- *
- *
- */
+
+// Ignores a specific signal that is stored in the parameter named signal
 void ignoreSignal(int signal) {
     struct sigaction ignore_action = {0};
 
@@ -539,7 +547,6 @@ struct commandLine * create() {
     cmd->inputFile = NULL;
     cmd->outputFile = NULL;
     cmd->argCount = -5;
-    //cmd->status = 0;
     return cmd;
 }
 
