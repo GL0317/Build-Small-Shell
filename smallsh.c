@@ -67,22 +67,6 @@ void ignoreSignal(int signal);
 void foregroundModeSignal();
 void setFgMode();
 
-/*** unit tests ***/
-void print(struct commandLine *cmd) {
-    int index = 0;
-
-    while (cmd->cmdLine[index]) {
-        printf("%s\n", cmd->cmdLine[index]);
-        ++index;
-    }
-    printf("argCount = %d\n", cmd->argCount);
-    printf("input file = %s\n", cmd->inputFile);
-    printf("output file = %s\n", cmd->outputFile);
-    if (cmd->isBackground) {
-        printf("In background mode\n");
-    }
-}
-/**********************/
 
 
 int main() {
@@ -107,8 +91,8 @@ int main() {
                // check the status of each process in the array
                if (waitpid(bgProcess.bgPid[i], &exitMethod, WNOHANG) != 0) {
                    printf("background pid %d is done: ", bgProcess.bgPid[i]);
-                   //get the exit status
-                   if(getExitStatus(exitMethod, line)) {
+                   if (getExitStatus(exitMethod, line)) {
+                       //show the exit status of the most recent foreground
                         printf("Exit value %d\n", line->status);
                    }
                    bgProcess.bgPid[i] = -1;
@@ -130,7 +114,6 @@ void setFgMode() {
     char *onMsg = "\nEntering foreground-only mode (& is now ignored)\n: ";
     char *offMsg = "\nExiting foreground-only mode\n: ";
 
-    // 52 size
     if (foregroundMode) {
         foregroundMode = 0;  // turn of mode
         write(STDOUT_FILENO, offMsg, 32);
@@ -251,7 +234,10 @@ int getExitStatus(int childProcess, struct commandLine *cmd) {
     int signal, flag = 0;
     // determine if child terminated normally
     if (WIFEXITED(childProcess)) {
-        cmd->status = WEXITSTATUS(childProcess);
+        // exit status are for foreground commands only
+        if (!cmd->isBackground) {
+            cmd->status = WEXITSTATUS(childProcess);
+        }
         flag = 1;
     } else if (WIFSIGNALED(childProcess)) {
         signal = WTERMSIG(childProcess);
@@ -378,6 +364,7 @@ int verifyInput( char *userInput) {
     char symbol= '#';
     char format = '\n';
     int size = -1;
+    int previous;
 
     // remove the newline character at the end of user input string
     size = strlen(userInput);
@@ -386,14 +373,16 @@ int verifyInput( char *userInput) {
         return 0;;
     }
     for (int i = size; i >= 0; --i) {
+        previous = i - 1;
         if (userInput[i] == '\n') {
             userInput[i] = '\0';
-        }
-        if (userInput[i] == '&') {
-            userInput[i] = '\0';
-            flag = 2;
+            // check previous index to see if it's a background token "&"
+            if (userInput[previous] == '&') {
+                userInput[previous] = '\0';
+                flag = 2; 
+            }
             break;
-        }
+        } 
     }
     return flag;
 }
@@ -527,6 +516,10 @@ void prompt(struct commandLine *cmd, int *exitValue, struct backgroundPID *bgPD)
     // if it's built-in, send to built-in manager
     while ( index < 3 && !isBuiltIn) {
         if (!strcmp(cmd->cmdLine[0], builtInCmd[index])) {
+            // make sure background mode is off
+            if (cmd->isBackground) {
+                cmd->isBackground = false;
+            }
             *exitValue = builtInManager(cmd, bgPD);
             isBuiltIn = true;
         }
