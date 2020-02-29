@@ -16,7 +16,7 @@
  *              foreground mode feature that makes all commands foreground only.
  * AUTHOR: Gerson Lindor Jr. (lindorg@oregonstate.edu)
  * DATE CREATED: February 16, 2020
- * DATE LAST MODIFIED: February 26, 2020
+ * DATE LAST MODIFIED: February 28, 2020
  */
 
 #include <stdio.h>

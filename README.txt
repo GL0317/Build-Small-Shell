@@ -4,7 +4,7 @@ Date: February 26, 2020
 
 To compile the program:
 
-gcc -g -Wall -std=gnu99 smallsh.c -o smallsh
+gcc -g -std=gnu99 smallsh.c -o smallsh
 
 To run test, p3testscript, (use one of the options below):
 
